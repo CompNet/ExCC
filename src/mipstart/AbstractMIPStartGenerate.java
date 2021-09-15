@@ -22,4 +22,6 @@ public interface AbstractMIPStartGenerate {
 	
 	public abstract SolutionManager generateMIPStart() throws IloException;
 
+	public abstract SolutionManager loadIntSolution(int[] initialPartitionMembership) throws IloException;
+
 }

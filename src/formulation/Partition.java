@@ -22,6 +22,7 @@ import ilog.concert.IloException;
 import ilog.concert.IloNumVar;
 import ilog.cplex.IloCplex.UnknownObjectException;
 import variable.CplexVariableGetter;
+import variable.VariableLister.VariableListerException;
 
 
 public abstract class Partition implements IFEdgeV, IFEdgeW{
@@ -42,7 +43,7 @@ public abstract class Partition implements IFEdgeV, IFEdgeW{
 	}
 
 	
-	public static Partition createPartition(Param param) throws IloException{
+	public static Partition createPartition(Param param) throws IloException, VariableListerException{
 
 		Partition p = null;
 
@@ -353,6 +354,25 @@ public abstract class Partition implements IFEdgeV, IFEdgeW{
 	}
 	
 	
+	public int[] retreiveMembership(){
+		int[] membership = new int[this.n];
+		int clusterId = 1;
+		for(TreeSet<Integer> cluster : clusters) {
+			for(Integer v : cluster)
+				membership[v] = clusterId;
+			clusterId++;
+		}
+		
+		String content = "";
+		for(int v=0; v<membership.length; v++){
+			if(!content.equals(""))
+				content += "\n";
+			content += membership[v];
+		}
+		
+		return(membership);
+	}
+	
 	
 	public List<TreeSet<Integer>> getClusters() {
 		return(this.clusters);
@@ -383,6 +403,33 @@ public abstract class Partition implements IFEdgeV, IFEdgeW{
 	}
 	
 	
+//	/**
+//	 * Write a solution into file
+//	 * 
+//	 */
+//	public void writeClusters(String fileName){
+//		//String filepath = getOutputDirPath() + "/" + fileName;
+//		clusters = getClusters();
+//		
+//		String content = "";
+//		for(TreeSet<Integer> cluster : clusters) {
+//			if(!content.equals(""))
+//				content += "\n";
+//			content += cluster.toString();
+//		}
+//			
+//		try{
+//			 BufferedWriter writer = new BufferedWriter(new FileWriter(fileName));
+//			 writer.write(content);
+//			 writer.close();
+//		 } catch(IOException ioe){
+//		     System.out.print("Erreur in writing output file: ");
+//		     ioe.printStackTrace();
+//		 }
+//	}
+	
+	
+	
 	/**
 	 * Write a solution into file
 	 * 
@@ -391,13 +438,28 @@ public abstract class Partition implements IFEdgeV, IFEdgeW{
 		//String filepath = getOutputDirPath() + "/" + fileName;
 		clusters = getClusters();
 		
-		String content = "";
+//		String content = "";
+//		for(TreeSet<Integer> cluster : clusters) {
+//			if(!content.equals(""))
+//				content += "\n";
+//			content += cluster.toString();
+//		}
+		
+		int[] membership = new int[this.n];
+		int clusterId = 1;
 		for(TreeSet<Integer> cluster : clusters) {
+			for(Integer v : cluster)
+				membership[v] = clusterId;
+			clusterId++;
+		}
+		
+		String content = "";
+		for(int v=0; v<membership.length; v++){
 			if(!content.equals(""))
 				content += "\n";
-			content += cluster.toString();
+			content += membership[v];
 		}
-			
+		
 		try{
 			 BufferedWriter writer = new BufferedWriter(new FileWriter(fileName));
 			 writer.write(content);
@@ -407,6 +469,7 @@ public abstract class Partition implements IFEdgeV, IFEdgeW{
 		     ioe.printStackTrace();
 		 }
 	}
+	
 	
 	
 }

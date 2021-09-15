@@ -57,6 +57,25 @@ public class PrimalHeuristicRounding implements AbstractMIPStartGenerate{
 		return result;
 	}
 
+	
+	public SolutionManager loadIntSolution(int[] membership) throws IloException  {
+		SolutionManager mip = new SolutionManager(formulation);		
+		
+		for(int m = 0 ; m < formulation.n() ; ++m)
+			bestMembership[m] = membership[m]; // assign each node to diff. cluster (starting from 1)
+		
+		for(int i=1; i<formulation.n(); i++) {
+			for(int j=0; j<i; j++) {
+				if(bestMembership[i] == bestMembership[j])
+					mip.setEdge(i,j,1.0);
+			}
+		}
+		
+        mip.setMembership(bestMembership);
+        
+        return(mip);
+	}
+	
 
 	/**
 	 * 

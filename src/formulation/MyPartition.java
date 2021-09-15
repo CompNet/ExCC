@@ -4,7 +4,9 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.text.DecimalFormat;
 import java.text.NumberFormat;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.Set;
 
 import callback.lazy_callback.LazyCBTriangle;
 import formulation.MyParam.Triangle;
@@ -22,6 +24,8 @@ import ilog.cplex.IloCplex.IntParam;
 import ilog.cplex.IloCplex.UnknownObjectException;
 // import inequality_family.Range;
 import inequality_family.Triangle_Inequality;
+import variable.VariableLister;
+import variable.VariableLister.VariableListerException;
 
 
 /**
@@ -58,14 +62,13 @@ public class MyPartition extends Partition implements IFEdgeVEdgeW{
 	 */
 	public IloNumVar[] v_rep;
 
-	public MyPartition(MyParam rp){
+	public MyPartition(MyParam rp) throws IloException, VariableListerException{
 		this(readDissimilarityInputFile(rp), rp);
 	}
 
 	public static boolean test = true;
-
-	public MyPartition(double objectif[][], MyParam rp) {
-
+	
+	public MyPartition(double objectif[][], MyParam rp) throws IloException, VariableListerException {
 		super(rp);
 
 		this.d = objectif;
@@ -75,26 +78,26 @@ public class MyPartition extends Partition implements IFEdgeVEdgeW{
 			this.p = new MyParam(rp);
 			
 
-		if(!rp.cplexOutput)
-			getCplex().turnOffCPOutput();
-
-		if(!rp.useCplexAutoCuts)
-			getCplex().removeAutomaticCuts();
-
-		if(!rp.useCplexPrimalDual)
-			getCplex().turnOffPrimalDualReduction();
-
-		try {
-
-			/* Create the model */
-			getCplex().iloCplex.clearModel();
-			getCplex().iloCplex.clearCallbacks();
-
-			/* Reinitialize the parameters to their default value */
-			getCplex().setDefaults();
+		
+		if(rp.getStatusReadLPModelFromFile() && rp.cplex.iloCplex.getNintVars()>0){ // if there are already variables, this means that we create an object from lp file
+			System.out.println("!!!!!!!!!!!!!!!!! LP read model");
+			
+			IloNumVar[] vars = VariableLister.parse(getCplex().iloCplex);
+			v_edge = new IloNumVar[n][];
+			for (int b = 0 ; b < n; ++b)
+				v_edge[b] = new IloNumVar[n];
+			
+			for(int a=0; a<vars.length; a++){
+				IloNumVar var = vars[a];
+				String[] parts = var.getName().split("_");
+				int i = Integer.parseInt(parts[1]);
+				int j = Integer.parseInt(parts[2]);
+				v_edge[i][j] = var;
+				v_edge[j][i] = var;
+			}
 			
 			System.out.println("rp.tilim: " + rp.tilim);
-
+			
 			if(rp.tilim != -1)
 				getCplex().setParam(IloCplex.DoubleParam.TiLim, Math.max(10,rp.tilim));
 
@@ -105,20 +108,141 @@ public class MyPartition extends Partition implements IFEdgeVEdgeW{
 //			if(p.isInt == true)
 //				getCplex().setParam(IloCplex.Param.Threads, 1);
 
+//			getCplex().setParam(IloCplex.Param.Threads, 1);
+			getCplex().setParam(IloCplex.Param.Threads, getCplex().iloCplex.getNumCores()-1);
 			
-			/* Create the variables */
-			createVariables();
-			createObjectiveFunction();
-			createConstraints(rp.triangle);
+			
+		} else {
+			System.out.println("!!!!!!!!!!!!!!!!! else");
+			
+			if(!rp.cplexOutput)
+				getCplex().turnOffCPOutput();
 
-			//Turn off preprocessing
-//			cplex.setParam(IloCplex.BooleanParam.PreInd, false);
+			if(!rp.useCplexAutoCuts)
+				getCplex().removeAutomaticCuts();
 
-		} catch (IloException e) {
-			System.err.println("Concert exception caught: " + e);
-			e.printStackTrace();
-			System.exit(0);
+			if(!rp.useCplexPrimalDual)
+				getCplex().turnOffPrimalDualReduction();
+
+		
+			try {
+	
+				/* Create the model */
+				getCplex().iloCplex.clearModel();
+				getCplex().iloCplex.clearCallbacks();
+	
+				/* Reinitialize the parameters to their default value */
+				getCplex().setDefaults();
+				
+				System.out.println("rp.tilim: " + rp.tilim);
+	
+				if(rp.tilim != -1)
+					getCplex().setParam(IloCplex.DoubleParam.TiLim, Math.max(10,rp.tilim));
+	
+	//			getCplex().setParam(DoubleParam.WorkMem, 256);
+	//			getCplex().setParam(DoubleParam.TreLim, 4000);
+	//			getCplex().setParam(IntParam.NodeFileInd, 3);
+				
+	//			if(p.isInt == true)
+	//				getCplex().setParam(IloCplex.Param.Threads, 1);
+	
+	//			getCplex().setParam(IloCplex.Param.Threads, 1);
+				getCplex().setParam(IloCplex.Param.Threads, getCplex().iloCplex.getNumCores()-1);
+				
+				
+				if(p.isInt == true) {
+					// source: https://www.ibm.com/developerworks/community/forums/html/topic?id=813d0940-702e-45ad-ba85-bf3cfb994a9b
+					//		=>   If you know that info is not needed and you will always make the branching decision, then you should set
+					//				the variable selection parameter to the computationally simplest setting, probably minimum or maximum integrality violation
+	//				getCplex().setParam(IloCplex.Param.MIP.Strategy.VariableSelect, 1); // Branch on variable with maximum infeasibility
+					
+					
+					
+					// https://www.ibm.com/support/knowledgecenter/SSSA5P_12.7.1/ilog.odms.cplex.help/CPLEX/Parameters/topics/PreDual.html
+	//				getCplex().iloCplex.setParam(IloCplex.Param.Preprocessing.Dual, 1); // this is a useful technique for problems with more constraints than variables.
+					//getCplex().iloCplex.setParam(IloCplex.Param.MIP.Strategy.KappaStats, 1);
+	
+	
+	
+					// https://perso.ensta-paris.fr/~diam/ro/online/cplex/cplex1271/CPLEX/Parameters/topics/VarSel.html
+					//getCplex().setParam(IloCplex.Param.MIP.Strategy.VariableSelect, 3); // strong branching
+					////getCplex().setParam(IloCplex.Param.MIP.Strategy.VariableSelect, 4); // reduced pseudo cost branching for a bit faster process
+					////getCplex().iloCplex.setParam(IloCplex.Param.Emphasis.MIP, 1); // to reduce the time spent at root node
+	//				getCplex().iloCplex.setParam(IloCplex.Param.MIP.Display, 5); // max info in log file
+	
+	                //getCplex().iloCplex.setParam(IloCplex.Param.MIP.Strategy.RINSHeur, 25);
+	//               getCplex().iloCplex.setParam(IloCplex.Param.MIP.Strategy.Probe, 3);
+	                //getCplex().iloCplex.setParam(IloCplex.Param.Preprocessing.Symmetry, 4);
+	                //// https://www.ibm.com/support/knowledgecenter/SSSA5P_12.7.1/ilog.odms.cplex.help/CPLEX/Parameters/topics/Symmetry.html
+	                ////getCplex().iloCplex.setParam(IloCplex.Param.MIP.Strategy.Branch, -1); // -1 down, 1 up
+	                ////getCplex().iloCplex.setParam(IloCplex.Param.MIP.PolishAfter.Time, 90); // https://www.ibm.com/developerworks/community/forums/html/topic?id=989e4d95-9f51-45d3-b2e6-bac23d5a9387
+	                //getCplex().iloCplex.setParam(IloCplex.Param.MIP.Cuts.Disjunctive, 2);
+				}
+				
+				/* Create the variables */
+				createVariables();
+				createObjectiveFunction();
+				createConstraints(rp.triangle);
+
+//			    ArrayList<int[]> clusterings = new ArrayList<>();
+//			    for(int lowerBound : rp.clusteringsByLowerBoundMap.keySet()){
+//				    for(int[] clustering : rp.clusteringsByLowerBoundMap.get(lowerBound)){
+//					    createDistinctSolutionConstraint(clustering, lowerBound);
+//					    clusterings.add(clustering);
+//				    }
+//			    }
+//
+//			    Clustering c = new Clustering(clusterings.get(0), -1); // we just need 1 optimal clustering to compute optimal objective value of CC
+//			    c.computeImbalance(d);
+//			    double optimalObjectiveValue = c.getImbalance();
+//			    createOptimalityConstraint(optimalObjectiveValue);
+				
+				//createOptimalityConstraint(618);
+	
+				//Turn off preprocessing
+	//			cplex.setParam(IloCplex.BooleanParam.PreInd, false);
+	
+			} catch (IloException e) {
+				System.err.println("Concert exception caught: " + e);
+				e.printStackTrace();
+				System.exit(0);
+			}
+		
+		
 		}
+	}
+	
+	
+	public Set<Edge> getEdges() {
+		Set<Edge> edges = new HashSet<>();
+		
+		for(int i=1; i<n; i++){
+			for(int j=0; j<i; j++){
+				Edge e = new Edge(i, j);
+				e.setWeight(d[i][j]);
+				edges.add(e);
+			}
+		}
+		
+		return(edges);
+	}
+	
+	
+	public int[] retreiveEdgeVariables()
+			throws UnknownObjectException, IloException {
+		int[] edgeVars = new int[this.n()*(this.n()-1)/2];
+
+		/* For each edge */
+		int k=0;
+		for(Edge e : this.getEdges()) {
+			double value = cvg.getValue(this.edgeVar(e.getSource(), e.getDest()));
+			if(value > 1E-4)
+				edgeVars[k++] = 1;
+			else
+				edgeVars[k++] = 0;
+		}
+			
+		return(edgeVars);
 	}
 
 	
@@ -147,6 +271,31 @@ public class MyPartition extends Partition implements IFEdgeVEdgeW{
 		else {
 			System.out.println("\n!!Don't add triangle or lazy callback for triangles");
 		}
+		
+		
+//		IloNumVar var = this.edgeVar(0,11);
+//		IloLinearNumExpr expr = this.getCplex().linearNumExpr();
+//		expr.addTerm(-1.0, var);
+//		this.getCplex().addLe(expr, -1.0); // force to be 1
+//
+//		var = this.edgeVar(62,66);
+//		expr = this.getCplex().linearNumExpr();
+//		expr.addTerm(-1.0, var);
+//		this.getCplex().addLe(expr, -1.0); // force to be 1
+
+
+//        String targets = "0,2;0,4;0,14;0,17;0,24";
+//        String[] parts = targets.split(";");        
+//
+//        for(int a=0; a<parts.length; a++){
+//            int i = Integer.parseInt(parts[a].split(",")[0]);
+//            int j = Integer.parseInt(parts[a].split(",")[1]);
+//
+//            var = this.edgeVar(i,j);
+//		    expr = this.getCplex().linearNumExpr();
+//		    expr.addTerm(1.0, var);
+//		    this.getCplex().addLe(expr, 0.0); // force to be 0
+//        }
 
 	}
 
@@ -173,7 +322,33 @@ public class MyPartition extends Partition implements IFEdgeVEdgeW{
 		}
 	}
 
-
+	
+	
+	
+	
+	/**
+	 *
+	 *
+	 */
+	void createDistinctSolutionConstraint(int[] prevEdgeVars, double lowerBound) throws IloException {
+		// https://www.ibm.com/support/pages/using-cplex-examine-alternate-optimal-solutions
+		IloLinearNumExpr expr = getCplex().linearNumExpr();
+		
+		int cardinalitySameCluster=0;
+		int k=0;
+		for(Edge e : this.getEdges()) {
+			if(prevEdgeVars[k] == 1){ // same cluster, so x*(i,j)=1
+				cardinalitySameCluster++;
+				expr.addTerm(+1.0, edgeVar(e.getSource(), e.getDest()));
+			}
+			else {
+				expr.addTerm(-1.0, edgeVar(e.getSource(), e.getDest()));
+			}
+			k++;
+		}
+		
+		getCplex().addLe(expr, cardinalitySameCluster-lowerBound);
+	}
 
 
 
@@ -212,6 +387,43 @@ public class MyPartition extends Partition implements IFEdgeVEdgeW{
 //		cplex.addMinimize(obj);
 		getCplex().iloCplex.addMinimize(getCplex().iloCplex.sum(obj, sum));
 
+	}
+	
+	
+	
+	/**
+	 * Create the optimality consraint
+	 * 
+	 * x_ij=1 means nodes i and j are in a common set
+	 * 
+	 * The objective function is:
+	 * 	 min (  sum_{ (i,j) \in E^- } w_ij x_ij + sum_{ (i,j) \in E^+ } w_ij (1- x_ij)  )
+	 * 
+	 * But here, we exclude the constant term which is:
+	 *  sum_{ (i,j) \in E^+ } w_ij.
+	 * Because we will add it at the end
+	 * So the objective function becomes: 
+	 * 	min - sum_{ (i,j) \in E^+ } w_ij x_ij + sum_{ (i,j) \in E^- } w_ij x_ij
+	 * Actually, they are equivalent
+	 *
+	 * @throws IloException
+	 */
+	public void createOptimalityConstraint(double upperBound) throws IloException {
+
+		IloLinearNumExpr expr = getCplex().linearNumExpr();
+
+		double sum = 0.0;
+		for (int i = 1; i < n; ++i)
+			for (int j = 0; j < i; ++j)
+				if(d[i][j] > 0.0d){ // process positive edges
+					expr.addTerm(-d[i][j], v_edge[i][j]);
+					sum += d[i][j]; // constant term
+				}
+				else if(d[i][j] < 0.0d) // process negative edges
+					expr.addTerm(Math.abs(d[i][j]), v_edge[i][j]);
+
+
+		getCplex().addLe(expr, upperBound-sum);
 	}
 
 
@@ -323,6 +535,8 @@ public class MyPartition extends Partition implements IFEdgeVEdgeW{
 			for (int j = i + 1; j < n - 1; ++j)
 				for (int k = j + 1; k < n; ++k) {
 
+					// IloCplex model = getCplex().iloCplex;
+					// System.out.println("!!");
 					getCplex().addRange(new Triangle_Inequality(this, i, j, k).createRange());
 					getCplex().addRange(new Triangle_Inequality(this, j, i, k).createRange());
 
@@ -340,7 +554,48 @@ public class MyPartition extends Partition implements IFEdgeVEdgeW{
 
 
 
-	
+    /**
+	 * Write the resulting graph into file. IT us useful for fractional edge variables
+	 * 
+	 * @param numberOfElementsByLine
+	 *            Number of variables displayed by line
+	 * @throws UnknownObjectException
+	 * @throws IloException
+	 * @throws IOException 
+	 */
+	public void writeEdgeVariablesIntoFile(String filePath, boolean keepOnlyExistingEdges)
+			throws UnknownObjectException, IloException, IOException {
+		System.out.println(filePath);
+		String content2 = "";
+		int nbEdges = 0;
+		
+		for(int i = 0; i < n; i++) {
+			
+			for(int j = i+1; j < n; j++) {
+				boolean process = true;
+
+				if(keepOnlyExistingEdges && d[i][j]==0)
+					process = false;
+//				if(!keepOnlyExistingEdges && value > 1E-4)
+//					process = false;
+				
+				double value = cvg.getValue(v_edge[i][j]);
+				
+				//if(process && value > 1E-4){
+						nbEdges++;
+						content2 = content2 + i + "\t" + j + "\t" + value + "\n";
+				//}
+			}
+		}
+		
+		String firstLine = this.n + "\t" + nbEdges + "\n";
+		String content = firstLine + content2;
+
+		BufferedWriter writer = new BufferedWriter(new FileWriter(filePath));
+		writer.write(content);
+		writer.close();
+		 
+	}
 
 
 	public void computeObjectiveValueFromSolution() {
@@ -412,6 +667,26 @@ public class MyPartition extends Partition implements IFEdgeVEdgeW{
 	}
 	
 	
+	public double solve(ArrayList<int[]> prevEdgeVarsList){
+		try {
+			if(prevEdgeVarsList.size()>0){
+			    for(int[] prevEdgeVars : prevEdgeVarsList){
+				    createDistinctSolutionConstraint(prevEdgeVars, 1);
+			    }
+			}
+			
+			double time = -getCplex().iloCplex.getCplexTime();		
+			getCplex().iloCplex.solve();
+			return time + getCplex().iloCplex.getCplexTime();
+			
+			
+		} catch (IloException e) {
+			e.printStackTrace();
+			return -1.0;
+		}
+	}
+	
+	
 	
 	
 	// ======================================================================
@@ -419,7 +694,7 @@ public class MyPartition extends Partition implements IFEdgeVEdgeW{
 	// To enumerate all optimal solution use this method instead of cplex.solve()
 	/* source: https://github.com/AdrianBZG/IBM_ILOG_CPLEX_Examples/
 	 * 			blob/master/java/src/examples/Populate.java */
-	public void populate() {
+	public void populate(long tilim, long tilimForEnumAll, int solLim) {
 				
 		/* set GAP to 0.5 instead of 0 for accepting rounding error
 		 * source: 
@@ -439,43 +714,58 @@ public class MyPartition extends Partition implements IFEdgeVEdgeW{
 			// For the value 4: the algorithm generates all solutions to your model
 			getCplex().iloCplex.setParam(IloCplex.Param.MIP.Pool.Intensity,4);
 			// 2100000000 is used as a high value
-			getCplex().iloCplex.setParam(IloCplex.Param.MIP.Limits.Populate, 2100000000);
+			if(solLim>0){
+				System.out.println("solution limit: " + solLim);
+				getCplex().iloCplex.setParam(IloCplex.Param.MIP.Limits.Populate, solLim-1);
+			}
+			else // 2100000000 is used as a high value
+				getCplex().iloCplex.setParam(IloCplex.Param.MIP.Limits.Populate, 2100000000);
 
-			System.out.println("----- 1st populate -----");
-			long start = System.currentTimeMillis();
-			boolean isOk = getCplex().iloCplex.populate();
-			long end = System.currentTimeMillis();
-			System.out.println("cplex is ok: " + isOk);
+			System.out.println("----- MIP solve -----");
+			long startTime = System.currentTimeMillis();
+			boolean isOk = getCplex().iloCplex.solve();
+			long endTime = System.currentTimeMillis();
+			float execTimeFirstPhase = (float) (endTime-startTime)/1000;
+			System.out.println("cplex is ok: " + isOk + " with exec time: " + execTimeFirstPhase);
 			System.out.println("cplex status: " + getCplex().iloCplex.getCplexStatus());
 			
-			System.out.println("----- 2nd populate -----");
-			start = System.currentTimeMillis();
+			double remainingTime = -1;
+			if(tilim>0 && tilimForEnumAll<0)
+				remainingTime = tilim-execTimeFirstPhase;
+			
+			System.out.println("----- populate -----");
+			
+			if(tilimForEnumAll>0) {
+				System.out.println("tilim for enum all: " + tilimForEnumAll);
+				getCplex().iloCplex.setParam(IloCplex.Param.TimeLimit, tilimForEnumAll);
+			}
+			else if(tilim>0){
+				if(remainingTime<0)
+					remainingTime = 1.0;
+				System.out.println("reaminigTime: " + remainingTime);
+				getCplex().iloCplex.setParam(IloCplex.Param.TimeLimit, remainingTime);
+			}
+			
+			startTime = System.currentTimeMillis();
 			isOk = getCplex().iloCplex.populate();
-			end = System.currentTimeMillis();
+			endTime = System.currentTimeMillis();
 			System.out.println("cplex is ok: " + isOk);
 			System.out.println("cplex status: " + getCplex().iloCplex.getCplexStatus());
 			
-			System.out.println("----- 3rd populate -----");
-			start = System.currentTimeMillis();
-			isOk = getCplex().iloCplex.populate();
-			end = System.currentTimeMillis();
-			System.out.println("cplex is ok: " + isOk);
-			System.out.println("cplex status: " + getCplex().iloCplex.getCplexStatus());
-			
-						
-			String filename = getOutputDirPath() + "/exec-time.txt";
+			String filename = getOutputDirPath() + "/exec-time-cplex.txt";
 			NumberFormat formatter = new DecimalFormat("#0.00000");
-			System.out.print("Execution time is "
-					+ formatter.format((end - start) / 1000d) + " seconds");
+			System.out.println("Execution time is "
+					+ formatter.format((endTime - startTime) / 1000d) + " seconds");
 			
 			try{
 				 BufferedWriter writer = new BufferedWriter(new FileWriter(filename));
-				 writer.write( formatter.format((end - start) / 1000d) + " seconds");
+				 writer.write( formatter.format((endTime - startTime) / 1000d));
 				 writer.close();
 			 } catch(IOException ioe){
 			     System.out.print("Erreur in writing output file: ");
 			     ioe.printStackTrace();
 			 }
+			
 			
 			if (isOk) {
 	            System.out.println("Solution status = " + getCplex().iloCplex.getStatus());
@@ -575,6 +865,8 @@ public class MyPartition extends Partition implements IFEdgeVEdgeW{
 	    
 	    return opt;
 	}
+	
+	
 
 		
 }

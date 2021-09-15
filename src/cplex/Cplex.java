@@ -1,7 +1,7 @@
 package cplex;
 
 import callback.cut_callback.CallbackRootRelaxation;
-import callback.presolve_callback.CallBackPresolveInfo;
+//import callback.presolve_callback.CallBackPresolveInfo;
 import ilog.concert.IloException;
 import ilog.concert.IloLinearNumExpr;
 import ilog.concert.IloNumExpr;
@@ -12,9 +12,11 @@ import ilog.cplex.IloCplex.BooleanParam;
 import ilog.cplex.IloCplex.ControlCallback;
 import ilog.cplex.IloCplex.DoubleParam;
 import ilog.cplex.IloCplex.IntParam;
+import ilog.cplex.IloCplex.LongParam;
 import ilog.cplex.IloCplex.ParameterSet;
 import ilog.cplex.IloCplex.UnknownObjectException;
 import inequality_family.Range;
+import ilog.cplex.IloCplex.CplexStatus;
 
 public class Cplex {
 
@@ -61,17 +63,17 @@ public class Cplex {
 	}
 
 
-	public void displayPresolveInfo() {
-
-		//cplex.setParam(IloCplex.IntParam.AggCutLim, -1);
-		CallBackPresolveInfo presolveCB = new CallBackPresolveInfo();
-		try {
-			iloCplex.use(presolveCB);
-		} catch (IloException e) {
-			e.printStackTrace();
-		}
-
-	}
+//	public void displayPresolveInfo() {
+//
+//		//cplex.setParam(IloCplex.IntParam.AggCutLim, -1);
+//		CallBackPresolveInfo presolveCB = new CallBackPresolveInfo();
+//		try {
+//			iloCplex.use(presolveCB);
+//		} catch (IloException e) {
+//			e.printStackTrace();
+//		}
+//
+//	}
 
 	public void displayObjectiveFunction(){
 		try {
@@ -238,6 +240,16 @@ public class Cplex {
 			e.printStackTrace();
 		}
 	}
+	
+	
+	public void setParam(LongParam p, long value) {
+		try {
+			iloCplex.setParam(p, value);
+		} catch (IloException e) {
+			e.printStackTrace();
+		}
+	}
+	
 
 	public double getParam(DoubleParam p) throws IloException {
 		return iloCplex.getParam(p);
@@ -289,5 +301,16 @@ public class Cplex {
 			e.printStackTrace();
 		}
 	}	
+	
+	
+	public CplexStatus getCplexStatus(){
+		try {
+			return(iloCplex.getCplexStatus());
+		} catch (IloException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		return(CplexStatus.Unknown);
+	}
 
 }

@@ -1,4 +1,4 @@
-<project  name="cplex-partition" default="run">
+<project  name="ExCC" default="run">
 
 <path id="jars">
   <fileset dir="./lib" includes="**/*.jar"/>
@@ -18,29 +18,36 @@
 
   <mkdir dir="exe"/>
 
-  <jar destfile="exe/cplex-partition.jar" basedir="bin">
+  <jar destfile="exe/ExCC.jar" basedir="bin">
 
     <zipgroupfileset dir="lib" includes="*.jar"/>
 
     <manifest>
-      <attribute name="Main-Class" value="main.Main"/>
+      <attribute name="Main-Class" value="main.MainExCC"/>
     </manifest>
 
   </jar>
 </target>
 
 <target name="run">
-  <java jar="exe/cplex-partition.jar" fork="true">
-    <sysproperty key="java.library.path" path="/opt/ibm/ILOG/CPLEX_Studio128/cplex/bin/x86-64_linux/"/>
-    <sysproperty key="inFile" path="${inFile}"/>
-    <sysproperty key="outDir" path="${outDir}"/>
+  <java jar="exe/ExCC.jar" fork="true">
+    <sysproperty key="java.library.path" path="/opt/ibm/ILOG/CPLEX_Studio201/cplex/bin/x86-64_linux/"/>
+    <sysproperty key="inFile" value="${inFile}"/>
+    <sysproperty key="outDir" value="${outDir}"/>
     <sysproperty key="cp" value="${cp}"/>
     <sysproperty key="enumAll" value="${enumAll}"/>
     <sysproperty key="tilim" value="${tilim}"/>
+    <sysproperty key="tilimForEnumAll" value="${tilimForEnumAll}"/>
+    <sysproperty key="solLim" value="${solLim}"/>
     <sysproperty key="MaxTimeForRelaxationImprovement" value="${MaxTimeForRelaxationImprovement}"/>
     <sysproperty key="lazyInBB" value="${lazyInBB}"/>
     <sysproperty key="userCutInBB" value="${userCutInBB}"/>
+    <sysproperty key="nbThread" value="${nbThread}"/>
     <sysproperty key="verbose" value="${verbose}"/>
+    <sysproperty key="initMembershipFilePath" value="${initMembershipFilePath}"/>
+    <sysproperty key="LPFilePath" value="${LPFilePath}"/>
+    <sysproperty key="onlyFractionalSolution" value="${onlyFractionalSolution}"/>
+    <sysproperty key="fractionalSolutionGapPropValue" value="${fractionalSolutionGapPropValue}"/>
   </java>
 </target>
 

@@ -7,19 +7,26 @@ import java.io.IOException;
 import java.text.DecimalFormat;
 import java.text.NumberFormat;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
+import java.util.TreeSet;
 
+import callback.branch_callback.BranchDisplayInformations;
+import callback.branch_callback.BranchFurtherFromInteger;
+import callback.branch_callback.Branch_EmptyCB;
 import callback.cut_callback.CutCallback_all;
 import callback.cut_callback.FastCutCallback;
 import callback.lazy_callback.LazyCBTriangle;
 
 import formulation.Partition;
 import formulation.MyPartition;
+import formulation.Edge;
 import formulation.MyParam;
 import formulation.MyParam.Triangle;
 import formulation.interfaces.IFEdgeV;
 import formulation.interfaces.IFormulation;
 import ilog.concert.IloException;
+import ilog.concert.IloLinearNumExpr;
 import ilog.concert.IloNumVar;
 import ilog.cplex.IloCplex;
 import inequality_family.AbstractInequality;
@@ -31,11 +38,15 @@ import separation.SeparationSTKL;
 import separation.SeparationSTLabbe;
 import separation.SeparationTCCKLFixedSize;
 import separation.SeparationTriangle;
+import variable.VariableLister.VariableListerException;
 
 public class CP extends AbstractCuttingPlane<MyPartition>{
 
 	int MAX_CUT;
 	boolean userCutInBB;
+	ArrayList<Edge> selEdges;
+	int solLim = -1; 
+	int tilimForEnumAll = -1;
 	
 	/**
 	 * 
@@ -46,16 +57,20 @@ public class CP extends AbstractCuttingPlane<MyPartition>{
 	 * @param reordering  ordering separation algorithms ==> OBSOLETE
 	 * @param tilim -1 if there is no limit on the time ; a time in seconds otherwise
 	 * @throws IloException 
+	 * @throws VariableListerException 
 	 */
 	public CP(MyParam p, int MAX_CUT, int modRemovingUntightCuts, int modFindIntSolution,
-			boolean reordering, double tilim, String outputDir, int MaxTimeForRelaxationImprovement, boolean isEnumAll_,
-			boolean verbose_)
-			throws IloException {
+			boolean reordering, double tilim, int tilimForEnumAll_, int solLim_, String outputDir, int MaxTimeForRelaxationImprovement, boolean isEnumAll_,
+			boolean verbose_, int[] initialPartitionMembership_,
+			boolean onlyFractionalSolution_, double fractionalSolutionGapPropValue_)
+			throws IloException, VariableListerException {
 		super(p, modRemovingUntightCuts, modFindIntSolution, reordering, tilim, outputDir, MaxTimeForRelaxationImprovement,
-				isEnumAll_, verbose_);
+				isEnumAll_, verbose_, initialPartitionMembership_, onlyFractionalSolution_, fractionalSolutionGapPropValue_);
 		
 		this.userCutInBB = p.userCutInBB;
 		formulation = (MyPartition)Partition.createPartition(p);
+		this.solLim = solLim_;
+		this.tilimForEnumAll = tilimForEnumAll_;
 		
 		try
 	    {
@@ -68,6 +83,7 @@ public class CP extends AbstractCuttingPlane<MyPartition>{
 	    }
 		
 		this.MAX_CUT = MAX_CUT;
+		
 	}
 
 	
@@ -150,6 +166,71 @@ public class CP extends AbstractCuttingPlane<MyPartition>{
 				));
 
 	}
+	
+	
+	
+	
+	/** 
+	 * Creates Integer formulation and provides it with the best feasible solution
+	 *  obtained during the Cutting Planes approach.
+	 * If Lazy callback or User Cuts are allowed in this Branch&Bound, 
+	 * CPLEX solves it with 1 thread. Otherwise, use the maximal number of threads
+	 * This Branch&Bound part is handled entirely by CPLEX (as a blackbox function,
+	 *  as contrary to the previous Root Relaxation part)
+	 * If time limit is specified in input parameters and the integer optimal solution
+	 *  is reached before time limit, the solution is written into file
+	 * 
+	 * @param remaining_time
+	 * @param mipStart  the best feasible solution obtained in the Root Relaxation part
+	 * @throws VariableListerException 
+	 * @throws IloException 
+	 */
+	@Override
+	public void RegisterLPmodelAfterCP() throws VariableListerException, IloException {
+
+		/* Get the tight constraints */
+		ArrayList<AbstractInequality<? extends IFormulation>> ineq =  this.getTightConstraints();
+		
+//		// indicate that the formulation/solution will be integer during the Branch&Bound
+		this.formulation.p.isInt = true;
+//		
+		formulation.p.cplexOutput = true;
+		
+		try {
+			/* Create the partition with integer variables */
+			formulation = ((MyPartition)Partition.createPartition((MyParam) this.formulation.p));
+//			formulation = new MyPartition((RepParam)formulation.p);
+			
+			//System.out.print("edge var:"+formulation.edgeVar(0, 1));
+//			System.out.print("edge var:"+formulation.edgeVar(0, 1)+", w"+formulation.variableGetter().getValue(formulation.edgeVar(0, 1)));
+
+			/* Add the previously tight constraints to the formulation */
+			for(AbstractInequality<? extends IFormulation> i : ineq){
+
+				i.setFormulation(formulation);
+				try {
+					formulation.getCplex().addRange(i.createRange());
+				} catch (IloException e) {
+					e.printStackTrace();
+				}
+			}
+			
+			
+			
+			// ================================================================================
+			// Export model with valid inequalities generated during lazy callback
+			// ================================================================================
+			formulation.getCplex().iloCplex.exportModel(this.outputDir+"/"+"strengthedModelAfterRootRelaxation.lp");
+			// ====================================================================================
+			
+			//this.formulation.p.isInt = false; // returns back to the initial setttings
+						
+		} catch (IloException e) {
+			e.printStackTrace();
+		}
+		
+		
+	}
 
 	
 	
@@ -166,44 +247,68 @@ public class CP extends AbstractCuttingPlane<MyPartition>{
 	 * 
 	 * @param remaining_time
 	 * @param mipStart  the best feasible solution obtained in the Root Relaxation part
+	 * @throws VariableListerException 
 	 */
 	@Override
-	public void findAllSolutionsAfterCP() {
+	public void findAllSolutionsAfterCP(double remaining_time, SolutionManager mipStart) throws VariableListerException {
 
-		/* Get the tight constraints */
-		ArrayList<AbstractInequality<? extends IFormulation>> ineq =  this.getTightConstraints();
-//		ArrayList<Abstract_Inequality> ineq = this.getAllConstraints();
-
-		// indicate that the formulation/solution will be integer during the Branch&Bound
-		formulation.p.isInt = true;
-		formulation.p.cplexOutput = true;
 		
-		String outputDirPath = formulation.getOutputDirPath();
+		// Note that this.formulation is already initialized/created with tight inequalities in RegisterLPmodelAfterCP()
+		
+		
+		if(mipStart != null){
+			try {
+				if(this.verbose)
+					System.out.println("!!! MIP START eval:"+mipStart.evaluate()+" !!!");
+				
+				mipStart.updateFormulationAndVariables(formulation);
+
+				mipStart.setVar();
+				formulation.getCplex().addMIPStart(mipStart.var, mipStart.val);
+				
+				if(this.verbose)
+					System.out.println("!!!!!!!!!!MIP START DONE!!!!!!!");
+			} catch (IloException e) {
+				e.printStackTrace();
+			}		
+		}
+		
+
+//		/* Get the tight constraints */
+//		ArrayList<AbstractInequality<? extends IFormulation>> ineq =  this.getTightConstraints();
+////		ArrayList<Abstract_Inequality> ineq = this.getAllConstraints();
+//
+//		// indicate that the formulation/solution will be integer during the Branch&Bound
+//		formulation.p.isInt = true;
+//		formulation.p.cplexOutput = true;
+		
+		//String outputDirPath = formulation.getOutputDirPath();
+		//formulation.setOutputDirPath(outputDirPath);
 		
 		try {
-			/* Create the partition with integer variables */
-			formulation = ((MyPartition)Partition.createPartition((MyParam)formulation.p));
-			formulation.setOutputDirPath(outputDirPath);
-//			formulation = new MyPartition((RepParam)formulation.p);
-			
-
-			/* Add the previously tight constraints to the formulation */
-			for(AbstractInequality<? extends IFormulation> i : ineq){
-
-				i.setFormulation(formulation);
-				try {
-					formulation.getCplex().addRange(i.createRange());
-				} catch (IloException e) {
-					e.printStackTrace();
-				}
-			}
-
-//			cpresult.time = - formulation.getCplex().getCplexTime();
-//			formulation.getCplex().solve();
-//			cpresult.time += formulation.getCplex().getCplexTime();
+//			/* Create the partition with integer variables */
+//			formulation = ((MyPartition)Partition.createPartition((MyParam)formulation.p));
+//			formulation.setOutputDirPath(outputDirPath);
+////			formulation = new MyPartition((RepParam)formulation.p);
+//			
+//
+//			/* Add the previously tight constraints to the formulation */
+//			for(AbstractInequality<? extends IFormulation> i : ineq){
+//
+//				i.setFormulation(formulation);
+//				try {
+//					formulation.getCplex().addRange(i.createRange());
+//				} catch (IloException e) {
+//					e.printStackTrace();
+//				}
+//			}
+//
+////			cpresult.time = - formulation.getCplex().getCplexTime();
+////			formulation.getCplex().solve();
+////			cpresult.time += formulation.getCplex().getCplexTime();
 
 				if(this.verbose)
-					System.out.println("out: " + formulation.getOutputDirPath());
+					System.out.println("out: " + this.outputDir);
 			
 				double GAP = 0.5;
 			
@@ -217,39 +322,57 @@ public class CP extends AbstractCuttingPlane<MyPartition>{
 				// For the value 4: the algorithm generates all solutions to your model
 				formulation.getCplex().iloCplex.setParam(IloCplex.Param.MIP.Pool.Intensity, 4);
 				// 2100000000 is used as a high value
-				formulation.getCplex().iloCplex.setParam(IloCplex.Param.MIP.Limits.Populate, 10000);
+				if(solLim>0){
+					System.out.println("solution limit: " + solLim);
+					formulation.getCplex().iloCplex.setParam(IloCplex.Param.MIP.Limits.Populate, solLim-1);
+				}
+				else // 2100000000 is used as a high value
+					formulation.getCplex().iloCplex.setParam(IloCplex.Param.MIP.Limits.Populate, 2100000000);
 
-				if(this.verbose)
-					System.out.println("----- 1st populate -----");
+				System.out.println("----- MIP solve -----");
+				long startTime = System.currentTimeMillis();
+				boolean isOk = formulation.getCplex().iloCplex.solve();
+				long endTime = System.currentTimeMillis();
+				float execTimeFirstPhase = (float) (endTime-startTime)/1000;
+				System.out.println("cplex is ok: " + isOk + " with exec time: " + execTimeFirstPhase);
+				System.out.println("cplex status: " + formulation.getCplex().iloCplex.getCplexStatus());
+				if(tilim>0 && tilimForEnumAll<0)
+					remaining_time -= execTimeFirstPhase;
 				
-				long start = System.currentTimeMillis();
-				boolean isOk = formulation.getCplex().iloCplex.populate();
-				long end = System.currentTimeMillis();
 				
-				if(this.verbose){
-					System.out.println("cplex is ok: " + isOk);
-					System.out.println("cplex status: " + formulation.getCplex().iloCplex.getCplexStatus());
+				System.out.println("----- populate -----");
+				if(tilimForEnumAll>0) {
+					System.out.println("tilim for enum all: " + tilimForEnumAll);
+					formulation.getCplex().iloCplex.setParam(IloCplex.Param.TimeLimit, tilimForEnumAll);
+				}
+				else if(tilim>0){
+					if(remaining_time<=0)
+						remaining_time = 1; // we still give 1s extra time for the time to start the populate method
+					System.out.println("remaining time: " + remaining_time);
+					formulation.getCplex().iloCplex.setParam(IloCplex.Param.TimeLimit, remaining_time);
 				}
 				
-//				System.out.println("----- 2nd populate -----");
-//				start = System.currentTimeMillis();
-//				isOk = formulation.getCplex().iloCplex.populate();
-//				end = System.currentTimeMillis();
-//				System.out.println("cplex is ok: " + isOk);
-//				System.out.println("cplex status: " + formulation.getCplex().iloCplex.getCplexStatus());
-//				
-//				System.out.println("----- 3rd populate -----");
-//				start = System.currentTimeMillis();
-//				isOk = formulation.getCplex().iloCplex.populate();
-//				end = System.currentTimeMillis();
-//				System.out.println("cplex is ok: " + isOk);
-//				System.out.println("cplex status: " + formulation.getCplex().iloCplex.getCplexStatus());
+				startTime = System.currentTimeMillis();
+				isOk = formulation.getCplex().iloCplex.populate();
+				endTime = System.currentTimeMillis();
+				System.out.println("cplex is ok: " + isOk);
+				System.out.println("cplex status: " + formulation.getCplex().iloCplex.getCplexStatus());
 				
-							
+				String filename = this.outputDir+"/"+"exec-time-cplex.txt";
 				NumberFormat formatter = new DecimalFormat("#0.00000");
-				if(this.verbose)
-					System.out.print("Execution time is "
-							+ formatter.format((end - start) / 1000d) + " seconds");
+				System.out.println("Execution time is "
+						+ formatter.format((endTime - startTime) / 1000d) + " seconds");
+
+				try{
+					 BufferedWriter writer = new BufferedWriter(new FileWriter(filename));
+					 writer.write( formatter.format((endTime - startTime) / 1000d));
+					 writer.close();
+				 } catch(IOException ioe){
+				     System.out.print("Erreur in writing output file: ");
+				     ioe.printStackTrace();
+				 }
+				
+				
 				
 				if (isOk) {
 					if(this.verbose){
@@ -265,7 +388,7 @@ public class CP extends AbstractCuttingPlane<MyPartition>{
 		                               " solutions.");
 		            
 		            // -------------------------------------------------------------
-		            /* Since GAP=0.5, there will be some sub-optimal olsutions, we need not to choose them.
+		            /* Since GAP=0.5, there will be some sub-optimal solutions, we need not to choose them.
 		             * So, determine best optimal solutions in the pool, get their indexes */
 		            HashSet<Integer> opt = formulation.determineBestSolsFromPool();
 		            
@@ -277,7 +400,7 @@ public class CP extends AbstractCuttingPlane<MyPartition>{
 			                   + " (obj value = " + formulation.getCplex().iloCplex.getObjValue(k) + "):");
 		
 		                formulation.retreiveClusters(k);
-		            	String filename = formulation.getOutputDirPath() + "/sol" + h + ".txt";
+		            	filename = this.outputDir + "/sol" + h + ".txt";
 		            	formulation.writeClusters(filename);
 		            	
 		            	h = h + 1;
@@ -306,55 +429,39 @@ public class CP extends AbstractCuttingPlane<MyPartition>{
 	 * 
 	 * @param remaining_time
 	 * @param mipStart  the best feasible solution obtained in the Root Relaxation part
+	 * @throws VariableListerException 
+	 * @throws IloException 
 	 */
 	@Override
-	public void findIntSolutionAfterCP(double remaining_time, SolutionManager mipStart) {
-		System.out.println("Remaining time for b&c: " + remaining_time);
-
-		/* Get the tight constraints */
-		ArrayList<AbstractInequality<? extends IFormulation>> ineq =  this.getTightConstraints();
-//		ArrayList<Abstract_Inequality> ineq = this.getAllConstraints();
-
-		// indicate that the formulation/solution will be integer during the Branch&Bound
-		formulation.p.isInt = true;
+	public void findIntSolutionAfterCP(double remaining_time, SolutionManager mipStart) throws VariableListerException, IloException {
 		
-		formulation.p.cplexOutput = true;
+		// Note that this.formulation is already initialized/created with tight inequalities in RegisterLPmodelAfterCP()
+		
+		System.out.println("Remaining time for b&c: " + remaining_time);
 		if(remaining_time != -1)
 			formulation.p.tilim = remaining_time;
 		
-		try {
-			/* Create the partition with integer variables */
-			formulation = ((MyPartition)Partition.createPartition((MyParam)formulation.p));
-//			formulation = new MyPartition((RepParam)formulation.p);
+		
+		if(mipStart != null){
+			try {
+				if(this.verbose)
+					System.out.println("!!! MIP START eval:"+mipStart.evaluate()+" !!!");
+				
+				mipStart.updateFormulationAndVariables(formulation);
+
+				mipStart.setVar();
+				formulation.getCplex().addMIPStart(mipStart.var, mipStart.val);
+				
+				if(this.verbose)
+					System.out.println("!!!!!!!!!!MIP START DONE!!!!!!!");
+			} catch (IloException e) {
+				e.printStackTrace();
+			}		
+		}
 			
-			if(mipStart != null){
-				try {
-					if(this.verbose)
-						System.out.println("!!! MIP START eval:"+mipStart.evaluate()+" !!!");
-					
-					mipStart.updateFormulationAndVariables(formulation);
-
-					mipStart.setVar();
-					formulation.getCplex().addMIPStart(mipStart.var, mipStart.val);
-					
-					if(this.verbose)
-						System.out.println("!!!!!!!!!!MIP START DONE!!!!!!!");
-				} catch (IloException e) {
-					e.printStackTrace();
-				}		
-			}
-
-			/* Add the previously tight constraints to the formulation */
-			for(AbstractInequality<? extends IFormulation> i : ineq){
-
-				i.setFormulation(formulation);
-				try {
-					formulation.getCplex().addRange(i.createRange());
-				} catch (IloException e) {
-					e.printStackTrace();
-				}
-			}
-
+			
+		try {
+			
 			CutCallback_all acc = null;
 //			FastCutCallback acc = null;
 			if(this.userCutInBB) {
@@ -363,8 +470,14 @@ public class CP extends AbstractCuttingPlane<MyPartition>{
 				formulation.getCplex().use(acc);
 			}
 			
-
-			cpresult.time = - formulation.getCplex().getCplexTime();
+//			BranchFurtherFromInteger bcc = new BranchFurtherFromInteger();
+//			bcc.setPartition(formulation);
+//			TreeSet<ArrayList<Integer>> mipStartInArrayFormat = getMIPStartSolutionInArrayFormat(mipStart.membership);
+//			bcc.setMIPStartSolution(mipStartInArrayFormat);
+////			// // BranchDisplayInformations bcc = new BranchDisplayInformations();
+//			formulation.getCplex().use(bcc);
+			
+			cpresult.time = -formulation.getCplex().getCplexTime();
 
 			formulation.getCplex().solve();
 			cpresult.time += formulation.getCplex().getCplexTime();
@@ -375,15 +488,186 @@ public class CP extends AbstractCuttingPlane<MyPartition>{
 				System.out.println("bestRelax. = " + formulation.getCplex().getBestObjValue());
 			}
 			
-//			formulation.retreiveClusters();
-//			formulation.displayClusters();
-//			formulation.writeClusters(outputDir + "/result.txt");
+			formulation.retreiveClusters();
+			formulation.displayClusters();
+			formulation.writeClusters(outputDir + "/sol0.txt");
 			
 		} catch (IloException e) {
 			e.printStackTrace();
 		}
 
 	}
+	
+	
+	
+	
+	
+	
+//	/** 
+//	 * Creates Integer formulation and provides it with the best feasible solution
+//	 *  obtained during the Cutting Planes approach.
+//	 * If Lazy callback or User Cuts are allowed in this Branch&Bound, 
+//	 * CPLEX solves it with 1 thread. Otherwise, use the maximal number of threads
+//	 * This Branch&Bound part is handled entirely by CPLEX (as a blackbox function,
+//	 *  as contrary to the previous Root Relaxation part)
+//	 * If time limit is specified in input parameters and the integer optimal solution
+//	 *  is reached before time limit, the solution is written into file
+//	 * 
+//	 * @param remaining_time
+//	 * @param mipStart  the best feasible solution obtained in the Root Relaxation part
+//	 * @throws VariableListerException 
+//	 * @throws IloException 
+//	 */
+//	@Override
+//	public void findIntSolutionAfterCP(double remaining_time, SolutionManager mipStart) throws VariableListerException, IloException {
+//		System.out.println("Remaining time for b&c: " + remaining_time);
+//
+////		try {
+////			formulation.writeEdgeVariablesIntoFile(outputDir+"/fractionalGraph.G", false);
+////		} catch (IloException | IOException e1) {
+////			// TODO Auto-generated catch block
+////			e1.printStackTrace();
+////		}
+//		
+//		/* Get the tight constraints */
+//		ArrayList<AbstractInequality<? extends IFormulation>> ineq =  this.getTightConstraints();
+////		ArrayList<Abstract_Inequality> ineq = this.getAllConstraints();
+//
+//		// indicate that the formulation/solution will be integer during the Branch&Bound
+//		formulation.p.isInt = true;
+//		
+//		formulation.p.cplexOutput = true;
+//		if(remaining_time != -1)
+//			formulation.p.tilim = remaining_time;
+//		
+//		try {
+//			/* Create the partition with integer variables */
+//			formulation = ((MyPartition)Partition.createPartition((MyParam)formulation.p));
+////			formulation = new MyPartition((RepParam)formulation.p);
+//			
+//			if(mipStart != null){
+//				try {
+//					if(this.verbose)
+//						System.out.println("!!! MIP START eval:"+mipStart.evaluate()+" !!!");
+//					
+//					mipStart.updateFormulationAndVariables(formulation);
+//
+//					mipStart.setVar();
+//					formulation.getCplex().addMIPStart(mipStart.var, mipStart.val);
+//					
+//					if(this.verbose)
+//						System.out.println("!!!!!!!!!!MIP START DONE!!!!!!!");
+//				} catch (IloException e) {
+//					e.printStackTrace();
+//				}		
+//			}
+//
+//			/* Add the previously tight constraints to the formulation */
+//			for(AbstractInequality<? extends IFormulation> i : ineq){
+//
+//				i.setFormulation(formulation);
+//				try {
+//					formulation.getCplex().addRange(i.createRange());
+//				} catch (IloException e) {
+//					e.printStackTrace();
+//				}
+//			}
+//			
+//			
+//			if(this.selEdges != null)
+//				formulation.fixSelEdgeVarsToZero(this.selEdges);
+//
+//			
+//			
+////			// ================================================================================
+////			// Export model with valid inequalities generated during lazy callback
+////			// ================================================================================
+////			formulation.getCplex().iloCplex.exportModel(this.outputDir+"/"+"strengthedModelAfterRootRelaxation.lp");
+////			
+////			// ====================================================================================
+//						
+//						
+//			
+//			CutCallback_all acc = null;
+////			FastCutCallback acc = null;
+//			if(this.userCutInBB) {
+//				acc = new CutCallback_all(formulation, 500);
+////				acc = new FastCutCallback(formulation, 500);
+//				formulation.getCplex().use(acc);
+//			}
+//			
+//			BranchFurtherFromInteger bcc = new BranchFurtherFromInteger();
+//			bcc.setPartition(formulation);
+//			TreeSet<ArrayList<Integer>> mipStartInArrayFormat = getMIPStartSolutionInArrayFormat(mipStart.membership);
+//			bcc.setMIPStartSolution(mipStartInArrayFormat);
+////			// // BranchDisplayInformations bcc = new BranchDisplayInformations();
+//			formulation.getCplex().use(bcc);
+//			
+//			cpresult.time = - formulation.getCplex().getCplexTime();
+//
+//			formulation.getCplex().solve();
+//			cpresult.time += formulation.getCplex().getCplexTime();
+//			cpresult.getResults(formulation, acc, false);
+//			
+//			if(this.verbose){
+//				System.out.println("bestInt = " + formulation.getCplex().getObjValue());
+//				System.out.println("bestRelax. = " + formulation.getCplex().getBestObjValue());
+//			}
+//			
+////			formulation.retreiveClusters();
+////			formulation.displayClusters();
+////			formulation.writeClusters(outputDir + "/result.txt");
+//			
+//		} catch (IloException e) {
+//			e.printStackTrace();
+//		}
+//
+//	}
+	
+	
+	
+	
+    public TreeSet<ArrayList<Integer>> getMIPStartSolutionInArrayFormat(int[] membership){
+    	int n = membership.length;
+    	int nbCluster=0;
+		for(int i=0; i<n; i++){
+			if(membership[i]>nbCluster)
+				nbCluster = membership[i];
+		}
+		
+		TreeSet<ArrayList<Integer>> orderedClusters = new TreeSet<ArrayList<Integer>>(
+				new Comparator<ArrayList<Integer>>(){
+					// descending order by array size
+					@Override
+					public int compare(ArrayList<Integer> o1, ArrayList<Integer> o2) {
+						int value=-1;
+						if(o1.size() < o2.size())
+							value = 1;
+//						else if(o1.size() < o2.size())
+//								value = -1;
+						return value;
+					}
+				}
+		);
+
+		
+    	ArrayList<ArrayList<Integer>> clusters = new ArrayList<ArrayList<Integer>>(nbCluster);
+		for(int i=1; i<=nbCluster; i++) // for each cluster
+			clusters.add(new ArrayList<Integer>());
+		for(int i=0; i<n; i++) // for each node
+			clusters.get(membership[i]-1).add(i); // membership array has values starting from 1
+		
+		for(int i=1; i<=nbCluster; i++){ // for each cluster
+			ArrayList<Integer> newCluster = clusters.get(i-1);
+			orderedClusters.add(newCluster);
+		}
+		
+
+		return(orderedClusters);
+    }
+    
+    
+    
 
 	
 	public SolutionManager getMIPStart() throws IloException{
@@ -441,7 +725,6 @@ public class CP extends AbstractCuttingPlane<MyPartition>{
 	
 	
 	
-
 
 
 }

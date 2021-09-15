@@ -10,6 +10,7 @@ public class Edge{
 	int i;
 	int j;
 	int hashcode;
+	double weight;
 
 	public Edge(int i, int j){
 		this.i=i;
@@ -18,6 +19,12 @@ public class Edge{
 		hashcode = 1000 * this.i + this.j;
 	}
 
+	
+	public void setWeight(double w) {
+		this.weight = w;
+	}
+	
+	
 	@Override
 	public int hashCode(){	
 		return hashcode;

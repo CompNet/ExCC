@@ -247,6 +247,12 @@ public class PrimalHeuristicRoundingRosa implements AbstractMIPStartGenerate{
         
 		return(mip);
 	}
+
+	@Override
+	public SolutionManager loadIntSolution(int[] initialPartitionMembership) throws IloException {
+		// TODO Auto-generated method stub
+		return null;
+	}
 	
 	
 	

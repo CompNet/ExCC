@@ -1,12 +1,16 @@
 package cutting_plane;
 
+import java.io.IOException;
+import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.Iterator;
 
 import formulation.Param;
+import formulation.Edge;
 import formulation.MyPartition;
 import formulation.interfaces.IFormulation;
 import ilog.concert.IloException;
+import ilog.concert.IloNumVar;
 import ilog.concert.IloRange;
 import ilog.cplex.IloCplex;
 import inequality_family.AbstractInequality;
@@ -14,6 +18,7 @@ import mipstart.AbstractMIPStartGenerate;
 import mipstart.SolutionManager;
 import results.CPResult;
 import results.ComputeResults;
+import variable.VariableLister.VariableListerException;
 
 
 
@@ -66,7 +71,7 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 	double tilim;
 	String outputDir;
 	
-
+	int[] initialPartitionMembership;
 	
 	// ============================================================
 	/* Maximal time in seconds given to the cutting plane step to improve
@@ -85,10 +90,19 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 	double cptilim = -1;
 	boolean verbose = true;
 	
+	boolean is40percentOptimalityGap = false;
+	boolean is30percentOptimalityGap = false;
+	boolean is20percentOptimalityGap = false;
+	boolean is10percentOptimalityGap = false;
+	boolean is5percentOptimalityGap = false;
+
+	
+	boolean onlyFractionalSolution = false;
+	double fractionalSolutionGapPropValue = -1.0; // not specific gap value, when there is no improvement
 
 	// ============================================================
 	
-
+	 
 	
 	/**
 	 * 
@@ -103,7 +117,9 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 	 */
 	public AbstractCuttingPlane(Param p, int minimalTimeBeforeRemovingUntightCuts,
 			int modFindIntSolution, boolean reordering, double tilim, String outputDir,
-			int MaxTimeForRelaxationImprovement, boolean isEnumAll_, boolean verbose_) throws IloException{
+			int MaxTimeForRelaxationImprovement, boolean isEnumAll_, boolean verbose_,
+			int[] initialPartitionMembership_, boolean onlyFractionalSolution_, double fractionalSolutionGapPropValue_)
+					throws IloException{
 
 		p.isInt = false;
 		cpresult = new CPResult();
@@ -115,12 +131,15 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 		this.outputDir = outputDir;
 		this.isEnumAll = isEnumAll_;
 		this.verbose = verbose_;
+		this.initialPartitionMembership = initialPartitionMembership_;
 		
 		setMaxTimeForRelaxationImprovement(MaxTimeForRelaxationImprovement);
 		if(tilim > 0) { // if time limit is provided by user
 			setTimeLimitForCuttingPlanes();
 		}
 		
+		this.onlyFractionalSolution = onlyFractionalSolution_;
+		this.fractionalSolutionGapPropValue = fractionalSolutionGapPropValue_;
 	}
 
 	
@@ -133,7 +152,7 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 	 * Solve a formulation with the Cutting Plane approach.
 	 * 
 	 * However, this is a manual version. The author of the code source, Zacharie Ales,
-	 * claims that CPLEX sometimes adds some extra functionality that you may not want to add.
+	 * claims that CPLEX sometimes adds some extra functionalities that you may not want to add.
 	 * In order to prevent from that, he decided to implement his own version of 
 	 * Cutting Plane approach. 
 	 * ==> TODO we should add another Cutting Plane approach which uses only CPLEX methods.
@@ -158,13 +177,11 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 	 * 
 	 * 
 	 * @return
+	 * @throws VariableListerException 
+	 * @throws IloException 
 	 */
-	public double solve(){
+	public double solve() throws VariableListerException, IloException{
 		
-		/* TODO verifier qu'apres la phase de CP si la solution est entiere elle 
-		 * verifie bien toutes les inegalite de la formulation (peut arriver si
-		 *  on ne laisse pas assez de temps dans la phase de plans coupants */
-
 
 		cpresult.cp_time = -formulation.getCplex().getCplexTime();
 		
@@ -180,9 +197,9 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 		boolean isInteger = false;
 		double last_cp_relaxation = -Double.MAX_VALUE;
 		double cpTime; // temp variable
-		
 		SolutionManager bestMIP = null;
-
+		double bestInt = Double.MAX_VALUE;
+		
 		try {
 			// =================================================================
 			solveRootRelaxation();
@@ -191,7 +208,12 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 			cpresult.cp_first_relaxation = formulation.getCplex().getObjValue();
 			cpresult.cp_iteration = 0;
 
-			double bestInt = Double.MAX_VALUE; // the best objective function value
+			if(this.initialPartitionMembership != null){
+				bestMIP = LoadInitialIntegerSolution();
+				bestMIP.setMembership(this.initialPartitionMembership);
+				bestInt = bestMIP.evaluate();
+			}
+
 			
 			boolean cutFound = true;
 			boolean optimumFound = false;
@@ -206,6 +228,7 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 
 			while((remainingTime > 0 || tilim == -1.0) && cutFound && !optimumFound 
 					&& !MaxTimeForRelaxationImprovementReached){
+				
 				
 				// =============================================================
 				// init
@@ -243,6 +266,48 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 				gap = ComputeResults.improvement(last_cp_relaxation,  bestInt);
 				cpTime = formulation.getCplex().getCplexTime() + cpresult.cp_time;
 
+				
+				
+				// --------------------------------------------------------
+				boolean takeGraphSnapshot = false;
+				double gapProp = (Math.round(100*gap)/100.0);
+				if(!is40percentOptimalityGap && (gapProp<=0.4 && gapProp>0.3)){
+					is40percentOptimalityGap = true;
+					takeGraphSnapshot = true;
+				} else if(!is30percentOptimalityGap && (gapProp<=0.3 && gapProp>0.2)){
+					is30percentOptimalityGap = true;
+					takeGraphSnapshot = true;
+				} else if(!is20percentOptimalityGap && (gapProp<=0.2 && gapProp>=0.1)){
+					is20percentOptimalityGap = true;
+					takeGraphSnapshot = true;
+				} else if(!is10percentOptimalityGap && (gapProp<=0.1 && gapProp>0.05)){
+					is10percentOptimalityGap = true;
+					takeGraphSnapshot = true;
+				} else if(!is5percentOptimalityGap && (gapProp<=0.05 && gapProp>0.01)){
+					is5percentOptimalityGap = true;
+					takeGraphSnapshot = true;
+				} 
+				
+				if(takeGraphSnapshot){
+					try {
+						((MyPartition) formulation).writeEdgeVariablesIntoFile(outputDir+"/fractionalGraph_gap="+gapProp+".G", false);
+					} catch (IloException | IOException e1) {
+						// TODO Auto-generated catch block
+						e1.printStackTrace();
+					}
+					
+					takeGraphSnapshot = false; // init
+				}
+				// --------------------------------------------------------
+				
+				
+				if(gapProp <= fractionalSolutionGapPropValue) {
+					if(this.verbose)
+						System.out.println("The cutting plane method is stopped, since it reaches the threshold value for gap: " + fractionalSolutionGapPropValue);
+					break;
+				}
+				
+				
 				if(this.verbose)
 					System.out.println(Math.round(cpTime) + "s : ["
 						+ Math.round(last_cp_relaxation) + ", " + Math.round(bestInt) + "] "
@@ -250,6 +315,8 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 
 				/* Is the relaxation an integer solution? */ 
 				isInteger = isInteger();
+				
+				
 				
 				/* If the solution is Integer, test if triangle constraints find
 				 *  a violated inequality or not. If there is not any violation, 
@@ -267,9 +334,11 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 					}
 				}
 
-				
+
 				/* If the solution is not integer */
-				if(!this.isEnumAll && (!isInteger || !optimumFound)){
+				// if an incumbent solution is already provided by ILSCC, then no need to perform a primal heuristic
+				// ILSCC usually performs better than the primal heuristic that we employ here
+				if(this.initialPartitionMembership == null && !this.isEnumAll && (!isInteger || !optimumFound)){
 
 					if(remainingTime < MIN_REMAINING_TIME 
 							|| cpresult.cp_iteration % modFindIntSolution == 0) {
@@ -318,12 +387,23 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 				}
 
 				
+				
+				if(tilim > 0) { // if time limit is provided by user
+					/* Remaining cutting plane time */
+					cpTime = formulation.getCplex().getCplexTime();
+					remainingTime = cptilim - (cpTime + cpresult.cp_time);
+				}
+				
+				
+				
+				
 				// =============================================================
 				// Generate user cuts
-				if(!optimumFound && !MaxTimeForRelaxationImprovementReached){
+				if((remainingTime > 0 || tilim == -1.0) && !optimumFound && !MaxTimeForRelaxationImprovementReached){
 					/* The 'generateUserCuts' method also stores the corresponding
 					separation method id for generated cuts => tagInequality() */
 					toAdd = generateUserCuts(remainingTime); 
+					
 					
 					if(toAdd.size() != 0) {
 						cutFound = true;
@@ -358,13 +438,9 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 				if(this.verbose)
 					System.out.println("cpresult.cp_iteration: " + cpresult.cp_iteration);
 				
-				if(tilim > 0) { // if time limit is provided by user
-					/* Remaining cutting plane time */
-					cpTime = formulation.getCplex().getCplexTime();
-					remainingTime = cptilim - (cpTime + cpresult.cp_time);
-				}
 				
-			}
+				// ----------------------------------
+			} // end of while
 			
 			// -------------------
 			if(!this.isEnumAll) 
@@ -396,62 +472,103 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 				cpresult.cpCutNb.add(cpresult.new Cut(s.se.name, s.addedIneq.size()));
 		
 		
-		if(!this.isEnumAll){
-			if(this.verbose)
-				System.out.println("mod: find only one solution");
-			
-			if(isInteger){
-				if(this.verbose)
-					System.out.println("\nSolution is integer after cp");
-				
-				cpresult.bestRelaxation = -1.0;
-				cpresult.time = 0.0;
-				cpresult.node = 0;
-				cpresult.separationTime = -1.0;
-				cpresult.iterationNb = -1;
-			}
-			else if(!isInteger){
-				if(this.verbose)
-					System.out.println("\nSolution is not integer after cp");
-				
-				findIntSolutionAfterCP(tilim == -1 ? -1 : tilim - cpresult.cp_time, bestMIP);
-
-				if(this.verbose)
-					System.out.println("CP relaxation: " + last_cp_relaxation
-							+ " BC relaxation: " + cpresult.bestRelaxation);
-				
-				if(cpresult.bestRelaxation < last_cp_relaxation || cpresult.bestRelaxation > 1E15)
-					cpresult.bestRelaxation = last_cp_relaxation;
-			}
-			
 		
-			// ==========================================
+		if(isInteger){
+			if(this.verbose)
+				System.out.println("\nSolution is integer after cp");
 			
-
-			try {
-				cpresult.bestInt = formulation.getCplex().getObjValue();
-			} catch (IloException e) {
-				e.printStackTrace();
+			cpresult.bestRelaxation = -1.0;
+			cpresult.time = 0.0;
+			cpresult.node = 0;
+			cpresult.separationTime = -1.0;
+			cpresult.iterationNb = -1;
+			
+			if(this.isEnumAll && !onlyFractionalSolution){
+				if(this.verbose)
+					System.out.println("mod: enum all solutions");
+				
+				findAllSolutionsAfterCP(tilim == -1 ? -1 : tilim - cpresult.cp_time, bestMIP);
 			}
-			
-			MyPartition p = (MyPartition)formulation;				
-			p.retreiveClusters();
-			p.displayClusters();
-			//p.setOutputDirPath(this.outputDir);
-			p.writeClusters(this.outputDir + "/ExCC-result.txt");
-
-
-			cpresult.firstRelaxation = last_cp_relaxation;
-			
-			// ==========================================
-
-			
+			else if(!this.isEnumAll){
+			    // ===============================================
+			    // register the last graph snapshot before B&B
+			    try {
+				    ((MyPartition) formulation).writeEdgeVariablesIntoFile(outputDir+"/fractionalGraph.G", false);
+			    } catch (IloException | IOException e1) {
+				    // TODO Auto-generated catch block
+				    e1.printStackTrace();
+			    }
+			    // ===============================================
+			    
+				((MyPartition) formulation).retreiveClusters();
+				((MyPartition) formulation).displayClusters();
+				//p.setOutputDirPath(this.outputDir);
+				((MyPartition) formulation).writeClusters(this.outputDir + "/sol0.txt");
+				
+				RegisterLPmodelAfterCP();
+				
+				//formulation.computeObjectiveValueFromSolution(); // This does not give the correct value at this stage, do not use it here
+				//formulation.computeObjectiveValueFromClusters();
+			}
 		}
-		else if(this.isEnumAll){
-			System.out.println("mod: enum all solutions");
+		else if(!isInteger){
+			if(this.verbose)
+				System.out.println("\nSolution is not integer after cp");
 			
-			findAllSolutionsAfterCP();
+			// ===============================================
+			// register the last graph snapshot before B&B
+			try {
+				((MyPartition) formulation).writeEdgeVariablesIntoFile(outputDir+"/fractionalGraph.G", false);
+			} catch (IloException | IOException e1) {
+				// TODO Auto-generated catch block
+				e1.printStackTrace();
+			}
+			// ===============================================
+			
+			RegisterLPmodelAfterCP();
+			
+			if(!onlyFractionalSolution){
+				
+				if(!this.isEnumAll){
+					if(this.verbose)
+						System.out.println("mod: find only one solution");
+					
+					findIntSolutionAfterCP(tilim == -1 ? -1 : tilim - cpresult.cp_time, bestMIP);
+					
+					if(this.verbose)
+						System.out.println("CP relaxation: " + last_cp_relaxation
+								+ " BC relaxation: " + cpresult.bestRelaxation);
+					
+					if(cpresult.bestRelaxation < last_cp_relaxation || cpresult.bestRelaxation > 1E15)
+						cpresult.bestRelaxation = last_cp_relaxation;
+			
+					try {
+						cpresult.bestInt = formulation.getCplex().getObjValue();
+					} catch (IloException e) {
+						e.printStackTrace();
+					}
+					
+//					MyPartition p = (MyPartition)formulation;				
+//					p.retreiveClusters();
+//					p.displayClusters();
+//					//p.setOutputDirPath(this.outputDir);
+//					p.writeClusters(this.outputDir + "/ExCC-result.txt");
+		
+					cpresult.firstRelaxation = last_cp_relaxation;
+					
+				} else {
+					
+					if(this.verbose)
+						System.out.println("mod: enum all solutions");
+					
+					findAllSolutionsAfterCP(tilim == -1 ? -1 : tilim - cpresult.cp_time, bestMIP);
+					
+				}
+				
+			}
 		}
+		
+		
 		
 		cpresult.log();
 
@@ -519,14 +636,17 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 	/**
 	 * Find an integer solution thanks to the best relaxation found by the cutting plane step.
 	 * Warning : This method must update the secondStep_time attribute
+	 * @throws VariableListerException 
+	 * @throws IloException 
 	 */
-	public abstract void findIntSolutionAfterCP(double remaining_time, SolutionManager mipStart);
+	public abstract void findIntSolutionAfterCP(double remaining_time, SolutionManager mipStart) throws VariableListerException, IloException;
 
 	/**
 	 * Find all solutions after the cutting plane step.
 	 * Warning : 
+	 * @throws VariableListerException 
 	 */
-	public abstract void findAllSolutionsAfterCP();
+	public abstract void findAllSolutionsAfterCP(double remaining_time, SolutionManager mipStart) throws VariableListerException;
 
 
 	/**
@@ -797,6 +917,31 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 	
 	
 	
+	/**
+	 * 
+	 * This method aims at loading an initial int solution, probablyt retreived from ILS or another meta-heuristic
+	 * 
+	 * @return new_mip  a feasible solution
+	 * @throws IloException 
+	 */
+	public SolutionManager LoadInitialIntegerSolution() throws IloException {
+				
+		/*
+		 When you provide a MIP start as data, CPLEX processes it before starting branch
+		 and cut during an optimization. If one or more of the MIP starts define a solution,
+		 CPLEX installs the best of these solutions as the incumbent solution. Having an
+		 incumbent from the very beginning of branch and cut allows CPLEX to eliminate
+		 portions of the search space and thus may result in smaller branch-and-cut trees.
+		*/
+		AbstractMIPStartGenerate mipStartGenerator = initializeMIPStartGenerator();
+		SolutionManager new_mip = mipStartGenerator.loadIntSolution(this.initialPartitionMembership);
+		
+		return new_mip;
+	}
+
+	
+	
+	
 	
 	/**
 	 * 
@@ -905,6 +1050,13 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 		return toAdd;
 		
 	}
+
+
+
+	public abstract void RegisterLPmodelAfterCP() throws VariableListerException, IloException ;
+		
+	
+	// public abstract void fixSelEdgeVarsToZero(ArrayList<Edge> filtEdges);
 	
 	
 }

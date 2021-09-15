@@ -10,6 +10,8 @@ public class MyParam extends PartitionParam{
 	
 	public boolean userCutInBB = false;
 	
+	public boolean statusReadLPModelFromFile = false;
+	
 	/**
 	 * Specify how the triangle inequalities must be used
 	 * USE : the triangle inequalities are always put into the model
@@ -45,4 +47,11 @@ public class MyParam extends PartitionParam{
 		this.userCutInBB = userCutInBB;
 	}
 	
+	public boolean getStatusReadLPModelFromFile(){
+		return(statusReadLPModelFromFile);
+	}
+
+	public void setStatusReadLPModelFromFile(boolean statusReadLPModelFromFile_){
+		statusReadLPModelFromFile = statusReadLPModelFromFile_;
+	}
 }
