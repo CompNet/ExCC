@@ -326,10 +326,10 @@ public abstract class AbstractCuttingPlane<Formulation extends IFormulation> {
 					ArrayList<AbstractInequality<? extends IFormulation>> violatedIneqs;
 					violatedIneqs = checkLazilyIfIntegerSolutionValid(sepId);
 					if(violatedIneqs.size() > 0) {
-						if(!this.isEnumAll){ // do not add these triangle inequalities if the goal is to enumerate all solutions, we add all of them in 2nd phase
+						//if(!this.isEnumAll){ // do not add these triangle inequalities if the goal is to enumerate all solutions, we add all of them in 2nd phase
 							tagInequality(violatedIneqs, sepId);
 							toAdd.addAll(violatedIneqs);
-						}
+						//}
 						cutFound = true;
 					}
 				}
